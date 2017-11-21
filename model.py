@@ -8,42 +8,64 @@ from sklearn import feature_selection as fs
 from sklearn.pipeline import Pipeline
 
 from collections import defaultdict
+from itertools import chain
 
 import matplotlib.pyplot as plt
-
-
 
 #Model class
 class Model:
     results = None
     predictions = None
     pipeline = None 
-    params = None
-    grid = None
-    grid_summary = None
-    cv_model = None
-    cv_predictions = None
+    cv_models = {}
+    best_cv = None
     
-    def __init__(self, name, model, X, y):
-        #initialize with name, training data, target labels, and number of target classes
+    class CV_Model:
+        params = None
+        grid = None
+        grid_summary = None
+        model = None
+        predictions = None
+        
+        def __init__(self, name):
+            self.name = name
+    
+    def __init__(self, name, model, X_train, y_train, X_test, y_test):
+        #Name 
         self.name = name
-        self.X = X
-        self.y = y
+        #Data
+        self.X_train = X_train
+        self.y_train = y_train
+        self.X_test = X_test
+        self.y_test = y_test
+        #Initialzie Baseline Model
         self.model = model
-        self.fit = self.model.fit(X,y)
+        self.fit = self.model.fit(X_train,y_train)
+        self.predict()
         
-    def predict(self, X):
+    def predict(self):
         #baseline model predictions
-        self.predictions = self.model.predict_proba(X)
+        self.predictions = self.model.predict_proba(self.X_test)
+        fpr, tpr, thresholds = mt.roc_curve(self.y_test, self.predictions[:,1])
+        self.auc = mt.auc(fpr, tpr)
         
-    def cvPredict(self, X):
+    def cvPredict(self, name):
         #cv models predictions
-        self.cv_predictions = self.cv_model.predict_proba(X)
+        self.cv_models[name].predictions = self.cv_models[name].cv_model.predict_proba(self.X_test)
+        fpr, tpr, thresholds = mt.roc_curve(self.y_test, self.cv_models[name].predictions[:,1])
+        self.cv_models[name].auc = mt.auc(fpr, tpr)
         
-    def plotLearnCurveMultiParam(self):
+    def bestCVModel(self, name):
+        if self.best_cv is None:
+            self.best_cv = name
+        elif self.cv_models[name].auc > self.cv_models[self.best_cv].auc: 
+            self.best_cv = name
+            
+    def plotLearnCurveMultiParam(self, name):
         #plot learning curve for two parameters
         fig, axes = plt.subplots(figsize=(8,6))
-        data = pd.pivot_table(self.grid_summary, index=self.params[0], columns=self.params[1])
+        data = pd.pivot_table(self.cv_models[name].grid_summary, 
+                              index=self.cv_models[name].params[0], columns=self.cv_models[name].params[1])
         #Main line
         data['mean_score'].plot(ax=axes, figsize=(8,6))
         #std error lines
@@ -59,33 +81,33 @@ class Model:
         #Plot aesthetics
         plt.legend()
         plt.tight_layout()
-        plt.title("Learning Curve of {0}:\n{1}".format(self.name, str(self.params)))
+        plt.title("Learning Curve of {0}:\n{1}".format(self.cv_models[name].name, str(self.cv_models[name].params)))
         
-    def plotLearnCurve(self):
+    def plotLearnCurve(self, name):
         #plot learning curve for one parameter
         fig, axes = plt.subplots(figsize=(8,6))
         #Main Line
-        x_val = self.grid_summary[self.params]
-        max_idx = self.grid_summary.mean_score.argmax()
-        axes.plot(x_val, self.grid_summary.mean_score, 'C0', label='Mean AUC')
+        x_val = self.cv_models[name].grid_summary[self.cv_models[name].params]
+        max_idx = self.cv_models[name].grid_summary.mean_score.argmax()
+        axes.plot(x_val, self.cv_models[name].grid_summary.mean_score, 'C0', label='Mean AUC')
         #Std Error lines
-        lower = self.grid_summary.mean_score - self.grid_summary.std_err
+        lower = self.cv_models[name].grid_summary.mean_score - self.cv_models[name].grid_summary.std_err
         axes.plot(x_val, lower, 'C0', label='-1 Std.Err', linestyle='--')
-        upper = self.grid_summary.mean_score + self.grid_summary.std_err
+        upper = self.cv_models[name].grid_summary.mean_score + self.cv_models[name].grid_summary.std_err
         axes.plot(x_val, upper, 'C0', label='+1 Std.Err', linestyle='--')
         #1 std error rule
-        error_rule = self.grid_summary.mean_score.max() - self.grid_summary.std_err[max_idx]
+        error_rule = self.cv_models[name].grid_summary.mean_score.max() - self.cv_models[name].grid_summary.std_err[max_idx]
         xmin = x_val.min()
         xmax = x_val.max()
         plt.hlines(xmin = xmin, xmax = xmax, y = error_rule, color = 'r')
         #Plot aesthetics
         plt.legend()
         plt.tight_layout()
-        plt.title("Learning Curve of {0}:\n{1}".format(self.name, str(self.params)))
+        plt.title("Learning Curve of {0}:\n{1}".format(self.cv_models[name].name, str(self.cv_models[name].params)))
 
-    def gridSearchSummary(self):
+    def gridSearchSummary(self, name):
         #get data from gridsearch and return in better format
-        grid_summary = pd.DataFrame(self.grid.cv_results_)
+        grid_summary = pd.DataFrame(self.cv_models[name].grid.cv_results_)
         #iterate through parameters
         params_summary = defaultdict(list)
         for row in grid_summary.params:
@@ -95,46 +117,42 @@ class Model:
         #mean score
         params_summary_df['mean_score'] = grid_summary.mean_test_score
         #std error
-        scores_columns = ["split" + str(x)+ "_test_score" for x in range(0,self.grid.cv)]
-        std_err = np.sqrt(grid_summary[scores_columns].var(axis = 1, ddof = 0)/self.grid.cv)
+        scores_columns = ["split" + str(x)+ "_test_score" for x in range(0,self.cv_models[name].grid.cv)]
+        std_err = np.sqrt(grid_summary[scores_columns].var(axis = 1, ddof = 0)/self.cv_models[name].grid.cv)
         params_summary_df.insert(params_summary_df.columns.get_loc("mean_score")+1, 'std_err', std_err)
 
         return params_summary_df
 
-    def tuningIteration(self, estimator, param_grid, cv = 5, scoring = "roc_auc", plot = True):
+    def tuningIteration(self, name, estimator, param_grid, cv = 5, scoring = "roc_auc", plot = True):
         #BUild out gridsearch, cv model and plot learning curve
         #Build pipeline 
-        self.pipeline = Pipeline([('variance_thresh', fs.VarianceThreshold()), ('estimator', estimator)])
+        self.cv_models[name] = self.CV_Model(name)
+        self.cv_models[name].pipeline = Pipeline([('variance_thresh', fs.VarianceThreshold()), ('estimator', estimator)])
         #Build CV grid then run on data
-        self.grid = ms.GridSearchCV(self.pipeline, param_grid = param_grid, cv = cv, scoring = scoring,n_jobs = 4)
-        self.grid.fit(self.X, self.y)
+        self.cv_models[name].grid = \
+            ms.GridSearchCV(self.cv_models[name].pipeline,param_grid = param_grid, cv = cv, scoring = scoring, n_jobs = 4)
+        self.cv_models[name].grid.fit(self.X_train, self.y_train)
         #print results
-        print("Best Score: {:0.6}\n".format(self.grid.best_score_))
-        print("Best Params: ",self.grid.best_params_)
+        print("Best Score: {:0.6}\n".format(self.cv_models[name].grid.best_score_))
+        print("Best Params: ",self.cv_models[name].grid.best_params_)
         #add summary and best model to Model
-        self.params = list(param_grid.keys())
-        self.grid_summary = self.gridSearchSummary()
-        self.cv_model = self.grid.best_estimator_
+        self.cv_models[name].params = list(param_grid.keys())
+        self.cv_models[name].grid_summary = self.gridSearchSummary(name)
+        self.cv_models[name].cv_model = self.cv_models[name].grid.best_estimator_
+        self.cvPredict(name)
+        self.bestCVModel(name)
         #plot learning curve if wanted
-        if len(self.params) == 1 & plot:
-            self.plotLearnCurve()
+        if len(self.cv_models[name].params) == 1 & plot:
+            self.plotLearnCurve(name)
         elif plot:
-            self.plotLearnCurveMultiParam()
+            self.plotLearnCurveMultiParam(name)
             
-    def plotAUC(self, X_test, y_test, cv = False):
+    def plotAUC(self, X_test, y_test, name):
         #Plot auc of model
         #check if cross-validated model
-        if cv:
-            #check existence
-            if self.cv_predictions is None:
-                print("Adding predictions for cross-validated model")
-                self.cvPredict(X_test)
-            predictions = self.cv_predictions
+        if name:
+            predictions = self.cv_models[name].predictions
         else:
-            #check existence
-            if self.predictions is None:
-                print("Adding predictions for baseline model")
-                self.predict(X_test)
             predictions = self.predictions
         #plot auc
         fig, axes = plt.subplots(1,1, figsize=(8,6))
@@ -142,30 +160,29 @@ class Model:
         roc_auc = mt.auc(fpr, tpr)
         axes.plot(fpr, tpr, label = " (AUC = {:0.3})".format(roc_auc)) 
         #plot aesthetics
-        plt.title("ROC Curve")
+        plt.title("ROC Curve {}".format(self.cv_models[name].name))
         plt.xlabel("fpr")
         plt.ylabel("tpr")
         plt.legend()
             
-    def compare(self, X_test, y_test):
-        #compare auc of baseline model and cv-model
-        #check existence
-        if self.predictions is None:
-            print("Adding predictions for baseline model")
-            self.predict(X_test)
-        #check existence
-        if self.cv_predictions is None:
-            print("Adding predictions for cross-validated model")
-            self.cvPredict(X_test)
-        #wrapper for predictions and models
-        preds_zip = zip([self.predictions, self.cv_predictions], 
-                    ["Baseline {}".format(self.name), "Cross-Validated {}".format(self.name)])
+    def compareModels(self):
+        #compare auc of baseline model and cv-models
+        #Get all predictions and models
+        predictions = [[self.predictions]]
+        predictions.append([value.predictions for key, value in self.cv_models.items()])
+        predictions = list(chain(*predictions))
+        
+        names = [[self.name]]
+        names.append([value.name for key, value in self.cv_models.items()])
+        names = list(chain(*names))
+        
+        preds_zip = zip(predictions,names)
 
         fig, axes = plt.subplots(1,1, figsize=(8,6))
-        for each_preds, each_model in preds_zip:
-            fpr, tpr, thresholds = mt.roc_curve(y_test, each_preds[:,1])
+        for preds, name in preds_zip:
+            fpr, tpr, thresholds = mt.roc_curve(self.y_test, preds[:,1])
             roc_auc = mt.auc(fpr, tpr)
-            axes.plot(fpr, tpr, label = each_model+" (AUC = {:0.3})".format(roc_auc))
+            axes.plot(fpr, tpr, label = name + " (AUC = {:0.3})".format(roc_auc))
         #plot aesthetics
         plt.title("ROC Curves")
         plt.xlabel("fpr")
