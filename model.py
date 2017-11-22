@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 #Model class
 class Model:
-    results = None
+    names = []
     predictions = None
     pipeline = None 
     cv_models = {}
@@ -33,7 +33,8 @@ class Model:
     def __init__(self, name, model, X_train, y_train, X_test, y_test):
         #Name 
         self.name = name
-        #Data
+        self.names.append(name)
+        #Data            
         self.X_train = X_train
         self.y_train = y_train
         self.X_test = X_test
@@ -46,20 +47,25 @@ class Model:
     def predict(self):
         #baseline model predictions
         self.predictions = self.model.predict_proba(self.X_test)
-        fpr, tpr, thresholds = mt.roc_curve(self.y_test, self.predictions[:,1])
-        self.auc = mt.auc(fpr, tpr)
+        #auc
+        self.fpr, self.tpr, _ = mt.roc_curve(self.y_test, self.predictions[:,1])
+        self.auc = mt.auc(self.fpr, self.tpr)
         
     def cvPredict(self, name):
         #cv models predictions
         self.cv_models[name].predictions = self.cv_models[name].cv_model.predict_proba(self.X_test)
-        fpr, tpr, thresholds = mt.roc_curve(self.y_test, self.cv_models[name].predictions[:,1])
-        self.cv_models[name].auc = mt.auc(fpr, tpr)
+        #auc
+        self.cv_models[name].fpr, self.cv_models[name].tpr, _ = mt.roc_curve(self.y_test, self.cv_models[name].predictions[:,1])
+        self.cv_models[name].auc = mt.auc(self.cv_models[name].fpr, self.cv_models[name].tpr)
         
     def bestCVModel(self, name):
+        #update best cv-model
+        #if none are present
         if self.best_cv is None:
-            self.best_cv = name
-        elif self.cv_models[name].auc > self.cv_models[self.best_cv].auc: 
-            self.best_cv = name
+            self.best_cv = self.cv_models[name]
+        #only update if better
+        elif self.cv_models[name].auc > self.best_cv.auc: 
+            self.best_cv = self.cv_models[name]
             
     def plotLearnCurveMultiParam(self, name):
         #plot learning curve for two parameters
@@ -136,6 +142,7 @@ class Model:
         print("Best Score: {:0.6}\n".format(self.cv_models[name].grid.best_score_))
         print("Best Params: ",self.cv_models[name].grid.best_params_)
         #add summary and best model to Model
+        self.names.append(name)
         self.cv_models[name].params = list(param_grid.keys())
         self.cv_models[name].grid_summary = self.gridSearchSummary(name)
         self.cv_models[name].cv_model = self.cv_models[name].grid.best_estimator_
@@ -147,44 +154,46 @@ class Model:
         elif plot:
             self.plotLearnCurveMultiParam(name)
             
-    def plotAUC(self, X_test, y_test, name):
+    def plotAUC(self, name):
         #Plot auc of model
         #check if cross-validated model
         if name:
-            predictions = self.cv_models[name].predictions
+            fpr = self.cv_models[name].fpr
+            tpr = self.cv_models[name].tpr
+            auc = self.cv_models[name].auc
+            title = "ROC Curve {}".format(self.cv_models[name].name)
         else:
-            predictions = self.predictions
+            fpr = self.fpr
+            tpr = self.tpr
+            auc = self.auc
+            title = "ROC Curve {}".format(self.name)
         #plot auc
         fig, axes = plt.subplots(1,1, figsize=(8,6))
-        fpr, tpr, thresholds = mt.roc_curve(y_test, predictions[:,1])
-        roc_auc = mt.auc(fpr, tpr)
         axes.plot(fpr, tpr, label = " (AUC = {:0.3})".format(roc_auc)) 
         #plot aesthetics
-        plt.title("ROC Curve {}".format(self.cv_models[name].name))
+        plt.title(title)
         plt.xlabel("fpr")
         plt.ylabel("tpr")
         plt.legend()
-            
-    def compareModels(self):
-        #compare auc of baseline model and cv-models
-        #Get all predictions and models
-        predictions = [[self.predictions]]
-        predictions.append([value.predictions for key, value in self.cv_models.items()])
-        predictions = list(chain(*predictions))
         
-        names = [[self.name]]
-        names.append([value.name for key, value in self.cv_models.items()])
-        names = list(chain(*names))
-        
-        preds_zip = zip(predictions,names)
-
+    def withinCompare(self):
+    #plot aucs of models
         fig, axes = plt.subplots(1,1, figsize=(8,6))
-        for preds, name in preds_zip:
-            fpr, tpr, thresholds = mt.roc_curve(self.y_test, preds[:,1])
-            roc_auc = mt.auc(fpr, tpr)
-            axes.plot(fpr, tpr, label = name + " (AUC = {:0.3})".format(roc_auc))
+        for name in self.names:
+            #If cv-model
+            if name in self.cv_models:
+                fpr = self.cv_models[name].fpr
+                tpr = self.cv_models[name].tpr
+                auc = self.cv_models[name].auc
+            #Baseline Model
+            else:
+                fpr = self.fpr
+                tpr = self.tpr
+                auc = self.auc
+            axes.plot(fpr, tpr, label = name + " (AUC = {:0.3})".format(auc))
         #plot aesthetics
         plt.title("ROC Curves")
         plt.xlabel("fpr")
         plt.ylabel("tpr")
-        plt.legend()
+        plt.legend()   
+        
