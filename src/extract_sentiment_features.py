@@ -54,7 +54,7 @@ def main():
             ).set_index('UserID'), left_index=True, right_index=True)
     
     # Save transformed to disk
-    sentiment_dist_df.to_csv(main_directory + '/data/sentiment_dist_varol_dump.csv')
+    sentiment_dist_df.to_csv(main_directory + '/data/sentiment_dist_varol_dump_fixedmv.csv')
     
 if __name__ == "__main__":
     

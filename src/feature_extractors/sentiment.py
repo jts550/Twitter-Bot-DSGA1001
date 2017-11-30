@@ -41,9 +41,10 @@ class SentimentExtractor:
         
         mv_cols = (np.isnan(vader_df)).any()
         for each_col, each_bool in zip(mv_cols.index.values, mv_cols):
-            vader_df[each_col+'_mv'] = np.where(np.isnan(vader_df[each_col]), 1, 0)
-            col_mean = vader_df[each_col].mean()
-            vader_df[each_col] = vader_df[each_col].fillna(col_mean)
+            if each_bool == True:
+                vader_df[each_col+'_mv'] = np.where(np.isnan(vader_df[each_col]), 1, 0)
+                col_mean = vader_df[each_col].mean()
+                vader_df[each_col] = vader_df[each_col].fillna(col_mean)
             
         vader_df['TweetID'] = tweet_ids
     
@@ -113,9 +114,10 @@ class SentimentExtractor:
         
         mv_cols = (np.isnan(vad_df)).any()
         for each_col, each_bool in zip(mv_cols.index.values, mv_cols):
-            vad_df[each_col+'_mv'] = np.where(np.isnan(vad_df[each_col]), 1, 0)
-            col_mean = vad_df[each_col].mean()
-            vad_df[each_col] = vad_df[each_col].fillna(col_mean)
+            if each_bool == True:
+                vad_df[each_col+'_mv'] = np.where(np.isnan(vad_df[each_col]), 1, 0)
+                col_mean = vad_df[each_col].mean()
+                vad_df[each_col] = vad_df[each_col].fillna(col_mean)
     
         vad_df_scaled = vad_df.apply(lambda x: minmax_scale(x, (-1,1)) if x.dtype!=int else x)
         
