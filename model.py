@@ -60,31 +60,16 @@ class Model:
             mt.roc_curve(self.y_test, self.iterations[name].predictions[:,1])
         self.iterations[name].auc = mt.auc(self.iterations[name].fpr, self.iterations[name].tpr)
         
-    def bestIteration(self, name):
-        #update best cv-model
-        model = self.iterations[name]
-        #only update if better
-        if model.auc > self.best_iteration.auc: 
-            self.best_iteration = self.iterations[name]
-            #update the paramters to use for other iterations
-            for param in model.params:
-                #Get the param
-                param_clean = re.sub('estimator__', '',param)
-                #update with best
-                self.parameters[param_clean] = model.grid_summary[param][model.grid_summary.mean_score.idxmax()]
-            
-    def plotLearnCurveMultiParam(self, name):
+    def plotLearnCurveMultiParam(self, iteration):
         #plot learning curve for two parameters
         
-        model = self.iterations[name]
-        
         fig, axes = plt.subplots(figsize=(8,6))
-        data = pd.pivot_table(model.grid_summary, index=model.params[0], columns=model.params[1])
+        data = pd.pivot_table(iteration.grid_summary, index=iteration.params[0], columns=iteration.params[1])
         #Main line
         data['mean_score'].plot(ax=axes, figsize=(8,6))
         #std error lines
-        (data['Lbound']).plot(ax=axes, figsize=(8,6),alpha=0.25,linestyle='--')
-        (data['Ubound']).plot(ax=axes, figsize=(8,6),alpha=0.25,linestyle='--')
+        (data['lbound']).plot(ax=axes, figsize=(8,6),alpha=0.25,linestyle='--')
+        (data['ubound']).plot(ax=axes, figsize=(8,6),alpha=0.25,linestyle='--')
         #1 std error rule
         c_max = data['mean_score'].max().idxmax()
         r_max = data['mean_score'][c_max].idxmax()
@@ -95,33 +80,99 @@ class Model:
         #Plot aesthetics
         plt.legend()
         plt.tight_layout()
-        plt.title("Learning Curve of {0}:\n{1}".format(model.name, str(model.params)))
+        plt.title("Learning Curve of {0}:\n{1}".format(iteration.name, str(iteration.params)))
         
-    def plotLearnCurve(self, name):
+    def plotLearnCurve(self, iteration):
         #plot learning curve for one parameter
-        model = self.iterations[name]
         fig, axes = plt.subplots(figsize=(8,6))
         #Main Line
-        x_val = model.grid_summary[model.params]
-        max_idx = model.grid_summary.mean_score.argmax()
-        axes.plot(x_val, model.grid_summary.mean_score, 'C0', label='Mean AUC')
+        x_val = iteration.grid_summary[iteration.params]
+        max_idx = iteration.grid_summary.mean_score.argmax()
+        axes.plot(x_val, iteration.grid_summary.mean_score, 'C0', label='Mean AUC')
         #Std Error lines
-        axes.plot(x_val, model.grid_summary.Lbound, 'C0', label='-1 Std.Err', linestyle='--')
-        axes.plot(x_val, model.grid_summary.Ubound, 'C0', label='+1 Std.Err', linestyle='--')
+        axes.plot(x_val, iteration.grid_summary.lbound, 'C0', label='-1 Std.Err', linestyle='--')
+        axes.plot(x_val, iteration.grid_summary.ubound, 'C0', label='+1 Std.Err', linestyle='--')
         #1 std error rule
-        error_rule = model.grid_summary.mean_score.max() - model.grid_summary.std_err[max_idx]
+        error_rule = iteration.grid_summary.mean_score.max() - iteration.grid_summary.std_err[max_idx]
         xmin = x_val.min()
         xmax = x_val.max()
         plt.hlines(xmin = xmin, xmax = xmax, y = error_rule, color = 'r')
         #Plot aesthetics
         plt.legend()
         plt.tight_layout()
-        plt.title("Learning Curve of {0}:\n{1}".format(model.name, str(model.params)))
+        plt.title("Learning Curve of {0}:\n{1}".format(iteration.name, str(iteration.params)))
+        
+    def regularizedParamSearch(self, iteration, param, grid, descending, diff):
+        #1 std error rule
+        max_idx = grid.mean_score.argmax()
+        param_clean = re.sub('estimator__', '',param)
+        steps = iteration.model.steps
+        param_index = list([x[0] for x in steps]).index('estimator')
+        is_int = isinstance(steps[param_index][1].get_params()[param_clean], int)
+        #within 1 std error rule bound
+        cut = True
+        diff = diff
+        while(cut):
+            if diff >= 0.1:
+                #check if parameter is int
+                if is_int:
+                    self.parameters[param_clean] = int(grid[param][max_idx])
+                else:
+                    self.parameters[param_clean] = grid[param][max_idx]
+                return
+            stripped = grid
+            stripped = stripped[(abs(stripped.mean_score - grid.mean_score.max()) <= diff) & 
+                                (abs(stripped.lbound - grid.lbound[max_idx] <= diff))]
+           #cut down based on ascending parameter
+            if descending:
+                further = stripped[stripped[param] <= grid[param][max_idx]]
+            else:
+                further = stripped[stripped[param] >= grid[param][max_idx]]
+            cut = further.empty
+            diff *=  10
+        if is_int:
+            self.parameters[param_clean] = int(further[param].mean())
+        else:
+            self.parameters[param_clean] = further[param].mean()
+        
+    def regularizedParams(self, iteration, descending, diff):
+        #update for regularized parameters for next run through
+        grid =  iteration.grid_summary
+        #go through params
+        for param in iteration.params:
+            self.regularizedParamSearch(iteration, param, grid, descending, diff)
+            
+    def bestParams(self, iteration):
+        #update parameters for next run through
+        grid = iteration.grid_summary
+        for param in iteration.params:
+                param_clean = re.sub('estimator__', '',param)
+                steps = iteration.model.steps
+                param_index = list([x[0] for x in steps]).index('estimator')
+                is_int = isinstance(steps[param_index][1].get_params()[param_clean], int)
+                #update with best
+                if is_int:
+                    self.parameters[param_clean] = int(grid[param][grid.mean_score.idxmax()])
+                else:
+                    self.parameters[param_clean] = grid[param][grid.mean_score.idxmax()]
+        
+    def bestIteration(self, iteration, descending, diff, regularized, not_default):
+        #update best cv-model
+        #only update if better
+        if iteration.auc > self.best_iteration.auc: 
+            self.best_iteration = iteration
+            #update the paramters to use for other iterations
+            if not(not_default):
+                if regularized:
+                    self.regularizedParams(iteration, descending, diff)
+                else:
+                    self.bestParams(iteration)
+            else:
+                return
 
-    def gridSearchSummary(self, name):
+    def gridSearchSummary(self, iteration, name):
         #get data from gridsearch and return in better format
-        model = self.iterations[name]
-        grid_summary = pd.DataFrame(model.grid.cv_results_)
+        grid_summary = pd.DataFrame(iteration.grid.cv_results_)
         #iterate through parameters
         grid_new = defaultdict(list)
         for row in grid_summary.params:
@@ -131,38 +182,43 @@ class Model:
         #mean score
         grid_new['mean_score'] = grid_summary.mean_test_score
         #std error
-        scores_columns = ["split" + str(x)+ "_test_score" for x in range(0,model.grid.cv)]
-        std_err = np.sqrt(grid_summary[scores_columns].var(axis = 1, ddof = 0)/model.grid.cv)
+        scores_columns = ["split" + str(x)+ "_test_score" for x in range(0,iteration.grid.cv)]
+        std_err = np.sqrt(grid_summary[scores_columns].var(axis = 1, ddof = 0)/iteration.grid.cv)
         grid_new.insert(grid_new.columns.get_loc("mean_score")+1, 'std_err', std_err)
         #CI lines
-        grid_new['Lbound'] = grid_new.mean_score - grid_new.std_err
-        grid_new['Ubound'] = grid_new.mean_score + grid_new.std_err
+        grid_new['lbound'] = grid_new.mean_score - grid_new.std_err
+        grid_new['ubound'] = grid_new.mean_score + grid_new.std_err
         
-        return grid_new
+        self.iterations[name].grid_summary = grid_new
 
-    def addIteration(self, name, estimator, param_grid, cv = 5, scoring = "roc_auc", plot = True):
+    def addIteration(self, name, estimator, param_grid, default = None, descending = True, diff = 0.01, regularized = False, plot = True):
         #BUild out gridsearch, cv model and plot learning curve
         self.iterations[name] = self.Iteration(name)
         #Build pipeline 
-        self.iterations[name].pipeline = Pipeline([('variance_thresh', fs.VarianceThreshold()), ('estimator', estimator)])
+        if default:
+            self.iterations[name].pipeline = default
+            not_default = True
+        else:
+            self.iterations[name].pipeline = Pipeline([('variance_thresh', fs.VarianceThreshold()), ('estimator', estimator)])
+            not_default = False
         #Build CV grid then run on data
         self.iterations[name].grid = \
-            ms.GridSearchCV(self.iterations[name].pipeline,param_grid = param_grid, cv = cv, scoring = scoring, n_jobs = 4)
+            ms.GridSearchCV(self.iterations[name].pipeline, param_grid = param_grid, cv = 5, scoring = "roc_auc", n_jobs = 4)
         self.iterations[name].grid.fit(self.X_train, self.y_train)
         #print results
         print("Best Score: {:0.6}\n".format(self.iterations[name].grid.best_score_))
         print("Best Params: ",self.iterations[name].grid.best_params_)
         #add summary and best model to Model
         self.iterations[name].params = list(param_grid.keys())
-        self.iterations[name].grid_summary = self.gridSearchSummary(name)
+        self.gridSearchSummary(self.iterations[name], name)
         self.iterations[name].model = self.iterations[name].grid.best_estimator_
         self.predict(name)
-        self.bestIteration(name)
+        self.bestIteration(self.iterations[name], descending, diff, regularized, not_default)
         #plot learning curve if wanted
         if len(self.iterations[name].params) == 1 & plot:
-            self.plotLearnCurve(name)
+            self.plotLearnCurve(self.iterations[name])
         elif plot:
-            self.plotLearnCurveMultiParam(name)
+            self.plotLearnCurveMultiParam(self.iterations[name])
             
     def plotAUC(self, name):
         #Plot auc of model
