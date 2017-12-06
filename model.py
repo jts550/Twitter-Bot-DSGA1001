@@ -67,7 +67,7 @@ class Model:
         #cv models predictions
         self.iterations[name].predictions = self.iterations[name].model.predict_proba(self.X_test)
         #auc
-        self.iterations[name].fpr, self.iterations[name].tpr, self.iterations[name].threshholds = \
+        self.iterations[name].fpr, self.iterations[name].tpr, self.iterations[name].thresholds = \
             mt.roc_curve(self.y_test, self.iterations[name].predictions[:,1])
         self.iterations[name].auc = mt.auc(self.iterations[name].fpr, self.iterations[name].tpr)
         
