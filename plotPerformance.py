@@ -6,6 +6,7 @@ from matplotlib.ticker import FuncFormatter
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 
+from sklearn.metrics import roc_auc_score
 from sklearn.metrics import confusion_matrix
 
 from betweenCompare import betweenCompare
@@ -127,7 +128,49 @@ def plotROC(models, ax):
     ax.xaxis.set_major_formatter(pct_formatter)
     ax.legend()
     
-def plotPerformance(models, fp_cost=-0.03, fn_cost=-0.06, timeframe='yearly'):
+def bootstrapAUC(model, sampsize, nruns):
+    #List for holding AUC's
+    aucs = []
+    for i in range(nruns):
+        #Split data
+        samp = model.X_train.assign(target=model.y_train.values).sample(sampsize, replace = True)
+        #Instantiate Model based on variable choice
+        mod = model.best_iteration.model
+        #Train and test model    
+        mod.fit(samp.drop(['target'], 1), samp['target'])
+        predictions = mod.predict_proba(model.X_test)[:,1]
+        #get auc and append to list
+        auc = roc_auc_score(model.y_test, predictions)
+        aucs.append(auc)
+    #return average, std
+    return np.mean(aucs), np.sqrt((np.var(aucs)))
+
+def plotSampleSize(models, sampsize, nruns, axes):
+    x_vals = np.log2(sampsize)
+    #cmap = plt.cm.get_cmap('hsv', len(models) + 1)
+    #cmap(c)
+    
+    for c, model in enumerate(models):
+        model_mean = []
+        model_std = []
+        for samp in sampsize:
+            mean_auc, std_auc = bootstrapAUC(model, samp, nruns)
+            model_mean.append(mean_auc)
+            model_std.append(std_auc)
+            
+        means = pd.Series(model_mean)
+        stds= pd.Series(model_std)
+    
+        axes.plot(x_vals, means, label = model.name)
+        #axes.plot(x_vals, means - 2 * stds, linestyle='--', label='_nolegend_')
+        #axes.plot(x_vals, means + 2 * stds, linestyle='--', label='_nolegend_')
+        
+    axes.set_title("Performance Plot of Sample Sizes")
+    axes.set_xlabel("log(Sample Size)")
+    axes.set_ylabel("AUC")
+    axes.legend()
+    
+def plotPerformance(models, sampsize, nruns, fp_cost=-0.03, fn_cost=-0.06, timeframe='yearly'):
     # fp_cost based on Mopub rcpm
     # fn_cost = 2x fp_cost - Assume buyers act broadly because of a single bad actor
     # Twitter ad exchange request volume estimate:  
@@ -136,9 +179,10 @@ def plotPerformance(models, fp_cost=-0.03, fn_cost=-0.06, timeframe='yearly'):
     fig = plt.figure(figsize=(14,14))
     gs = gridspec.GridSpec(2, 4)
     gs.update(wspace=0.5)
-    axes = [plt.subplot(gs[0, :2], ), plt.subplot(gs[0, 2:]), plt.subplot(gs[1, 1:3])]
+    axes = [plt.subplot(gs[0, :2], ), plt.subplot(gs[0, 2:]), plt.subplot(gs[1, :2]), plt.subplot(gs[1, 2:])]
     
     plotProfitChange(models, axes[0], fp_cost, fn_cost, timeframe)
     plotProfitDiff(models, axes[1], fp_cost, fn_cost, timeframe)
     plotROC(models, axes[2])   
+    plotSampleSize(models, sampsize, nruns, axes[3])
     

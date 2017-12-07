@@ -45,7 +45,7 @@ class Model:
         #Set iteration parameters automatically
         self.iterationTesting()
     
-    def iterationTesting(self, cv = 3, jobs = 4, update_diff = 0.02, diff = 0.001, step = 1.5, cutoff = 0.01):
+    def iterationTesting(self, cv = 5, jobs = 4, update_diff = 0.02, diff = 0.001, step = 1.5, cutoff = 0.01):
         #Values for use in iteration Testing
         self.cv = cv
         self.jobs = jobs
@@ -195,8 +195,6 @@ class Model:
         if iteration.auc > self.best_iteration.auc: 
             self.best_iteration = iteration
         
-        
-
     def gridSearchSummary(self, iteration, name):
         #get data from gridsearch and return in better format
         grid_summary = pd.DataFrame(iteration.grid.cv_results_)
