@@ -16,7 +16,10 @@ from matplotlib.ticker import FuncFormatter
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 
+from numba import jitclass, jit, generated_jit, void
+
 #Model class
+
 class Model:
     
     class Iteration:
@@ -28,7 +31,8 @@ class Model:
             self.grid_output = None
             self.model = None
             self.predictions = None
-    
+            self.pipeline = None
+
     def __init__(self, name, model, X_train, y_train, X_test, y_test):
         #Name 
         self.name = name
@@ -44,7 +48,7 @@ class Model:
         self.parameters = {}
         #Set iteration parameters automatically
         self.iterationTesting()
-    
+
     def iterationTesting(self, cv = 5, jobs = 4, update_diff = 0.02, diff = 0.001, step = 1.5, cutoff = 0.01):
         #Values for use in iteration Testing
         self.cv = cv
@@ -53,7 +57,7 @@ class Model:
         self.diff = diff
         self.step = step
         self.cutoff = cutoff
-        
+
     def baseline(self, model):
         #Initialzie Baseline Model
         self.iterations["Baseline"] = self.Iteration("Baseline")
@@ -62,15 +66,15 @@ class Model:
         #SET PARAMS FOR BASELINE
         self.predict("Baseline")
         self.best_iteration = self.iterations["Baseline"]
-        
+
     def predict(self, name):
         #cv models predictions
-        self.iterations[name].predictions = self.iterations[name].model.predict_proba(self.X_test)
+        self.iterations[name].predictions = self.iterations[name].model.predict_proba(self.X_test)[:,1]
         #auc
         self.iterations[name].fpr, self.iterations[name].tpr, self.iterations[name].thresholds = \
-            mt.roc_curve(self.y_test, self.iterations[name].predictions[:,1])
+            mt.roc_curve(self.y_test, self.iterations[name].predictions)
         self.iterations[name].auc = mt.auc(self.iterations[name].fpr, self.iterations[name].tpr)
-        
+
     def plotLearnCurveMultiParam(self, iteration):
         #plot learning curve for two parameters
         
@@ -92,7 +96,7 @@ class Model:
         plt.legend()
         plt.tight_layout()
         plt.title("Learning Curve of {0}:\n{1}".format(iteration.name, str(iteration.params)))
-        
+
     def plotLearnCurve(self, iteration):
         #plot learning curve for one parameter
         fig, axes = plt.subplots(figsize=(8,6))
@@ -113,127 +117,130 @@ class Model:
         plt.legend()
         plt.tight_layout()
         plt.title("Learning Curve of {0}:\n{1}".format(iteration.name, str(iteration.params)))
-        
-    def regularizedParamaterSearch(self, iteration, param, param_clean, grid, is_int, des):
+
+    def isInt(self, iteration = None, param = None, param_clean = None, step = False):
+        #check if parameter is int, split between pipeline and classifier
+        if step:
+            return isinstance(step[1].get_params()[param_clean], int)
+        else: 
+            return isinstance(iteration.model.get_params()[param], int)
+   
+    def regularizedParamaterSearch(self, iteration, grid, param, des):
         #Find range for parameter, return mean
         max_idx = grid.mean_score.argmax()
+        #regularization direction
+        if des:
+            grid_cut = grid[grid[param] < grid[param][max_idx]]
+        else:
+            grid_cut = grid[grid[param] > grid[param][max_idx]]
         #run until there is a non-empty df
         cut = True
         diff = self.diff
         while(cut):
             if diff >= self.cutoff:
-                #check if parameter is int
-                if is_int:
-                    self.parameters[param_clean] = int(grid[param][max_idx])
-                else:
-                    self.parameters[param_clean] = grid[param][max_idx]
-                return
-            stripped = grid
-            #cut down based on ascending 
-            if des:
-                stripped = stripped[stripped[param] < grid[param][max_idx]]
-            else:
-                stripped = stripped[stripped[param] > grid[param][max_idx]]
+                return grid[param][max_idx]
+            grid_cut2 = grid_cut            
             #Cut down by bounds
-            further = stripped[(abs(stripped.mean_score - grid.mean_score.max()) <= diff) & 
-                               (abs(stripped.lbound - grid.lbound[max_idx] <= diff)) &
-                               (abs(stripped.ubound - grid.ubound[max_idx] <= diff))]
+            grid_cut3 = grid_cut2[(abs(grid_cut2.mean_score - grid.mean_score.max()) <= diff) & 
+                                  (abs(grid_cut2.lbound - grid.lbound[max_idx] <= diff)) &
+                                  (abs(grid_cut2.ubound - grid.ubound[max_idx] <= diff))]
             #Stop loop, if df is non-empty
-            cut = further.empty
+            cut = grid_cut3.empty
             diff *=  self.step
-        if is_int:
-            self.parameters[param_clean] = int(further[param].mean())
-        else:
-            self.parameters[param_clean] = further[param].mean()
+        return grid_cut3[param].mean()
+    
+    def bestParametersSearch(self, iteration, grid, param): 
+        #return the value of the best 
+        return grid[param][grid.mean_score.idxmax()]
+    
+    def parametersPipelineUpdate(self, iteration, grid, params, reg, des):
+        #Update for pipeline
+        #Go through steps
+        steps = iteration.model.steps
         
-    def regularizedParameters(self, iteration, des):
-        #update for regularized parameters for next run through
-        grid =  iteration.grid_output
-        
-        #Run through parameters
-        for param in iteration.params:
-            #Check if int
-            param_clean = re.sub('estimator__', '',param)
-            is_int = isinstance(self.estimator_step[param_clean], int)
-            #Find value
-            self.regularizedParamaterSearch(iteration, param, param_clean, grid, is_int, des)
+        for step in steps:
+            step_dict = {}   
+            extra = "{}__".format(step[0])
+            #Go through parameters
+            for param in params:
+                if(extra in param):
+                    #regularized or best param
+                    if reg:
+                        value = self.regularizedParamaterSearch(iteration, grid, param, des)
+                    else:
+                        value = self.bestParametersSearch(iteration, grid, param)
+                    #if param is in int
+                    if self.isInt(param_clean = re.sub(extra, '',param), step = step):
+                        value = int(value)
+                    step_dict[re.sub(extra, '',param)] = value
             
-    def bestParameters(self, iteration):
-        #update parameters for next run through
-        grid = iteration.grid_output
-        #Run thorugh parameters
-        for param in iteration.params:
-            #Check if int
-            param_clean = re.sub('estimator__', '',param)
-            is_int = isinstance(self.estimator_step[param_clean], int)
-            #update with best
-            if is_int:
-                self.parameters[param_clean] = int(grid[param][grid.mean_score.idxmax()])
+            if step[0] not in self.parameters:
+                self.parameters[step[0]] = step_dict
             else:
-                self.parameters[param_clean] = grid[param][grid.mean_score.idxmax()]
-                    
-    def updateParameters(self, iteration, reg, des, not_default):
-        #check if default pipeline
-        if not(not_default):
-            estimator_index = list([x[0] for x in iteration.model.steps]).index('estimator')
-            self.estimator_step = iteration.model.steps[estimator_index][1].get_params()
-            #Check if regularized or best param
+                self.parameters[step[0]].update(step_dict)            
+
+    def parametersUpdate(self, iteration, grid, params, reg, des):
+        #update the parameters of a normal sklearn classifer
+        for param in params:
+            #regularized or best param
             if reg:
-                self.regularizedParameters(iteration, des)
+                value = self.regularizedParamaterSearch(iteration, grid, param, des)
             else:
-                self.bestParameters(iteration)
-        #With different pipe, set params by hand
-        else:
-            return
+                value = self.bestParametersSearch(iteration, grid, param)
+            #param is int
+            if self.isInt(iteration = iteration, param = param):
+                value = int(value)
+            self.parameters[param] = value                    
+
+    def updateParameters(self, iteration, reg, des):
+        #check if default pipeline
+        grid = iteration.grid_output
+        params = iteration.params
         
-    def bestIteration(self, iteration, reg, des, not_default):
+        if iteration.pipeline:
+            self.parametersPipelineUpdate(iteration, grid, params, reg, des)                
+        else:
+            self.parametersUpdate(iteration, grid, params, reg, des)
+
+    def bestIteration(self, iteration, reg, des):
         #update best iteration
         #update the parameters to use for other iterations
-        if abs(iteration.auc - self.best_iteration.auc) <= self.update_diff:
-            self.updateParameters(iteration, reg, des, not_default)
+        #baseline has no grid
+        if (self.best_iteration.name == "Baseline"):
+            if(abs(iteration.auc - self.best_iteration.auc) <= self.update_diff):
+                self.updateParameters(iteration, reg, des)
+        else:
+            max_idx = self.best_iteration.grid_output.mean_score.idxmax()
+            if(iteration.auc >  self.best_iteration.grid_output.lbound[max_idx]):
+                self.updateParameters(iteration, reg, des)
         #only update if better
         if iteration.auc > self.best_iteration.auc: 
             self.best_iteration = iteration
-        
+    
     def gridSearchSummary(self, iteration, name):
         #get data from gridsearch and return in better format
-        grid_summary = pd.DataFrame(iteration.grid.cv_results_)
-        #iterate through parameters
-        grid_new = defaultdict(list)
-        for row in grid_summary.params:
-            for key, value in row.items():
-                grid_new[key] += [value]
-        grid_new = pd.DataFrame(grid_new)
+        grid_summary = iteration.grid.cv_results_
+        n = iteration.grid.cv
         #mean score
-        grid_new['mean_score'] = grid_summary.mean_test_score
-        #std error
-        scores_columns = ["split" + str(x) + "_test_score" for x in range(0,iteration.grid.cv)]
-        std_err = np.sqrt(grid_summary[scores_columns].var(axis = 1, ddof = 0)/iteration.grid.cv)
-        grid_new.insert(grid_new.columns.get_loc("mean_score")+1, 'std_err', std_err)
+        grid_new = pd.DataFrame(grid_summary['params'])
+        grid_new['mean_score'] = grid_summary['mean_test_score']
+        #std errort
+        scores_columns = ["split{}_test_score".format(x) for x in np.arange(n)]
+        grid_new['std_err'] = np.sqrt(pd.DataFrame(grid_summary)[scores_columns].var(axis = 1, ddof = 0)/n)
         #CI lines
         grid_new['lbound'] = grid_new.mean_score - grid_new.std_err
         grid_new['ubound'] = grid_new.mean_score + grid_new.std_err
         
         self.iterations[name].grid_output = grid_new
-        
-    def buildPipeline(self, name, pipeline, estimator):
-        #Build pipeline, indicator if default pipeline
-        if pipeline:
-            self.iterations[name].pipeline = pipeline
-            not_default = True
-        else:
-            self.iterations[name].pipeline = Pipeline([('estimator', estimator)])
-            not_default = False
-        return self.iterations[name].pipeline, not_default
 
-    def addIteration(self, name, estimator, param_grid, pipeline = None, reg = False, des = True, plot = True):
+    def addIteration(self, name, estimator, param_grid, reg = False, des = True, plot = True):
         #BUild out gridsearch, cv model and plot learning curve
         self.iterations[name] = self.Iteration(name)
         #Build pipeline 
-        pipeline, not_default = self.buildPipeline(name, pipeline, estimator)
+        self.iterations[name].pipeline = isinstance(estimator, Pipeline)
         #Build CV grid then run on data
         self.iterations[name].grid = \
-            ms.GridSearchCV(pipeline, param_grid = param_grid, cv = self.cv, scoring = "roc_auc", return_train_score=False)
+            ms.GridSearchCV(estimator, param_grid = param_grid, cv = self.cv, scoring = "roc_auc", return_train_score = False)
         self.iterations[name].grid.fit(self.X_train, self.y_train)
         #print results
         print("Best Score: {:0.6}\n".format(self.iterations[name].grid.best_score_))
@@ -244,21 +251,21 @@ class Model:
         self.iterations[name].model = self.iterations[name].grid.best_estimator_
         #Predictions and best iteration
         self.predict(name)
-        self.bestIteration(self.iterations[name], reg, des, not_default)
+        self.bestIteration(self.iterations[name], reg, des)
         #plot learning curve if wanted
         if len(self.iterations[name].params) == 1 & plot:
             self.plotLearnCurve(self.iterations[name])
         elif plot:
-            self.plotLearnCurveMultiParam(self.iterations[name])
-        
+            self.plotLearnCurveMultiParam(self.iterations[name] )
+
     def withinCompare(self):
     #plot aucs of models
         fig, axes = plt.subplots(1,1, figsize=(8,6))
-        for name in self.iterations:
+        for name in self.iterations.keys():
             fpr = self.iterations[name].fpr
             tpr = self.iterations[name].tpr
             auc = self.iterations[name].auc
-            axes.plot(fpr, tpr, label = name + " (AUC = {:0.3})".format(auc))
+            axes.plot(fpr, tpr, label = "{} (AUC = {:0.3})".format(self.iterations[name].name, auc))
         #plot aesthetics
         plt.title("ROC Curves")
         plt.xlabel("fpr")
