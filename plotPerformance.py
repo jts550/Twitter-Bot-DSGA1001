@@ -106,7 +106,7 @@ def plotProfitDiff(model, profits, max_profit, ax):
     pct_formatter = FuncFormatter(to_percent)
     #plot profit change vs pct instance
     #label with max profit diff
-    ax.plot(profits.pct_instance, profits.profit_change,
+    ax.plot(profits.pct_instance, profits.profit_diff,
             label = "{} Max: {}M Pct Inst.: {:0.1%}".format(model.name,
             locale.currency(max_profit['diff']*10**-6,grouping=True),max_profit['pct_instance']))
     ax.yaxis.set_major_formatter(mil_formatter)
@@ -171,7 +171,8 @@ def bootstrapAUC(model, sampsize, nruns):
     return np.mean(aucs)
 
 def plotSampleSize(models, sampsize, nruns, axes):
-    x_vals = np.log2(sampsize)
+    #x_vals = np.log2(sampsize)
+    x_vals = sampsize
     #cmap = plt.cm.get_cmap('hsv', len(models) + 1)
     #cmap(c)
     
@@ -189,8 +190,8 @@ def plotSampleSize(models, sampsize, nruns, axes):
         means = pd.Series(model_mean)
     
         axes.plot(x_vals, means, label = model.name)        
-    axes.set_title("Performance Plot of Sample Sizes")
-    axes.set_xlabel("log(Sample Size)")
+    axes.set_title("Comparison of Learning Curves")
+    axes.set_xlabel("Sample Size")
     axes.set_ylabel("AUC")
     axes.legend()
     
