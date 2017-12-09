@@ -22,17 +22,21 @@ def to_percent(x, pos):
     'The two args are the value and tick position'
     return '%.0f%%' % (x*100)
     
-def expectedValue(model, y_test, thresholds, cost_mat):
+
+def expectedValue(model, y_test, thresholds, cost_mat, pos_prior=0.15):
     # fp_cost and fn_cost should be the change in revenue associated with 1000 ad requests (i.e. rCPM change)
     # output of expected value is the expected rCPM 
     #predictions
     class_preds = [1 if x else 0 for x in model.predictions > thresholds]
     #confusion matrix
-    conf_mat = confusion_matrix(y_test, class_preds)/len(model.predictions)
+    tn, fp, fn, tp = confusion_matrix(y_test, class_preds).ravel()
+    fp_rate = np.true_divide(fp, fp+tn)
+    fn_rate = np.true_divide(fn, fn+tp)
     #expected value
-    ev = conf_mat[0,1]*cost_mat[0,1] + conf_mat[1,0]*cost_mat[1,0]
+    ev = pos_prior*(fn_rate*cost_mat[1,0]) + (1-pos_prior)*(fp_rate*cost_mat[0,1])
     
     return ev
+
 
 def dataProfit(timeframe, rcpm_change, pct_instance):
     #get profit data for each pct instance and rcpm change
